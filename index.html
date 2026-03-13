@@ -161,7 +161,7 @@ body { font-family:'Noto Sans TC',Arial,sans-serif; background:#f1f5f9; color:#0
         </div>
         <div class="grid-2">
           <div class="cc"><div class="cc-hd"><span>👨‍👩‍👧</span><div><div class="cc-title">家長背景影響</div></div></div><div class="cw-md"><canvas id="c-parent"></canvas></div></div>
-          <div class="cc"><div class="cc-hd"><span>📉</span><div><div class="cc-title">年級流失分析</div></div></div><div class="cw-md"><canvas id="c-gloss"></canvas></div></div>
+          <div class="cc"><div class="cc-hd"><span>📉</span><div><div class="cc-title">年齡穩定度比較</div></div></div><div class="cw-md"><canvas id="c-gloss"></canvas></div></div>
         </div>
       </div>
       <div id="cen-tbl" style="display:none"><div class="tbl-wrap"><table class="dtbl"><thead><tr><th>姓名</th><th>年級</th><th>召會</th><th>穩定度</th><th>父母</th></tr></thead><tbody id="cen-tbody"></tbody></table></div></div>
@@ -252,7 +252,6 @@ const CARE_ZONES = {
   '嘉義照顧區': ['嘉義','中埔','竹崎','番路','梅山'],
   '民雄照顧區': ['民雄','六腳','溪口','大林','新港'],
 };
-// Excel 小計列關鍵字 → CARE_ZONES key
 const ZONE_MAP = {'雲東':'雲東照顧區','雲西':'雲西照顧區','朴子':'朴子照顧區','嘉義':'嘉義照顧區','民雄':'民雄照顧區'};
 const CHIAYI_SUBS = ['中正','林森','新東','忠孝','永安','建成','新城','兒童','文雅','慈保','日新','北園','港坪','興美','永福','臺語'];
 const ALL_KNOWN = [...Object.values(CARE_ZONES).flat(), ...CHIAYI_SUBS];
@@ -320,22 +319,17 @@ function parseCensus(ws,sn,XLSX){
 
 // ════ Excel 解析 — 召會生活統計（三列表頭 + 月份欄）════
 function parseActivity(wb, XLSX){
-  // 選工作表
   const sn=wb.SheetNames.find(s=>s.includes('兒童')||s.includes('統計'))||wb.SheetNames[0];
   const raw=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1});
   if(raw.length<4) return {churches:[],months:[],zoneMap:{}};
 
-  // Row 0 找月份欄
-  const months=[]; // [{label,col}]
+  const months=[];
   (raw[0]||[]).forEach((v,i)=>{ if(v&&String(v).includes('月')) months.push({label:String(v).replace('週平均','').trim(),col:i}); });
 
-  // 掃所有資料列，利用「小計」行確定 zone 範圍
-  // 策略：小計行代表其「上方」那批資料的 zone
   const SKIP=['小計','合計'];
   const rows=raw.slice(3);
 
-  // 先找所有小計行位置和 zone
-  const zoneSegs=[]; // [{zoneKey, endIdx}] 小計在 raw(含3列header) 的第幾列
+  const zoneSegs=[];
   for(let i=0;i<rows.length;i++){
     const v=String(rows[i]?.[0]||'').trim();
     if(SKIP.some(k=>v.includes(k))){
@@ -344,7 +338,6 @@ function parseActivity(wb, XLSX){
     }
   }
 
-  // 分配 zone 給每列
   const churches=[], zoneMap={};
   let zoneIdx=0;
   for(let i=0;i<rows.length;i++){
@@ -352,7 +345,6 @@ function parseActivity(wb, XLSX){
     const v=String(row[0]||'').trim();
     if(!v||SKIP.some(k=>v.includes(k))){ if(SKIP.some(k=>v.includes(k))) zoneIdx++; continue; }
 
-    // 找當前 zone（找到哪個 seg 的 end >= i）
     const seg=zoneSegs.find((s,si)=>{ const prev=si>0?zoneSegs[si-1].end:-1; return i>prev&&i<s.end; });
     const zone=seg?seg.zone:(zoneSegs[0]?zoneSegs[0].zone:getZone(v));
 
@@ -383,7 +375,6 @@ async function handleFile(input){
     const reader=new FileReader();
     reader.onload=e=>{
       const wb=XLSX.read(e.target.result,{type:'binary'});
-      // 判斷格式：看有沒有「兒童」且含多列表頭的特殊統計表
       const isAct=wb.SheetNames.some(s=>s.includes('兒童')&&(s.includes('專項')||s.includes('統計')||s.includes('生活')));
       if(isAct){
         const r=parseActivity(wb,XLSX);
@@ -479,20 +470,24 @@ function renderCensus(){
   document.getElementById('cen-ch').style.display=curMode==='charts'?'block':'none';
   document.getElementById('cen-tbl').style.display=curMode==='table'?'block':'none';
   if(curMode==='charts'){
+    // ★ 過濾掉「未知」年級
+    const dKnown=d.filter(r=>r.grade!=='未知');
     const go=g=>g==='學齡前'?0:g.includes('年級')?parseInt(g):g==='國一'?10:11;
-    const grades=[...new Set(d.map(r=>r.grade))].sort((a,b)=>go(a)-go(b));
-    barC('c-grade',grades,[{data:grades.map(g=>d.filter(r=>r.grade===g).length),backgroundColor:'#3b82f6',borderRadius:4}]);
-    const cm={}; d.forEach(r=>{cm[r.church]=(cm[r.church]||0)+1;});
+    const grades=[...new Set(dKnown.map(r=>r.grade))].sort((a,b)=>go(a)-go(b));
+    barC('c-grade',grades,[{data:grades.map(g=>dKnown.filter(r=>r.grade===g).length),backgroundColor:'#3b82f6',borderRadius:4}]);
+    const cm={}; dKnown.forEach(r=>{cm[r.church]=(cm[r.church]||0)+1;});
     const srt=Object.entries(cm).sort((a,b)=>b[1]-a[1]).slice(0,20);
     hbarC('c-church',srt.map(x=>x[0]),srt.map(x=>x[1]),'#10b981');
-    const st=d.filter(r=>r.lifeLevel==='穩定').length,oc=d.filter(r=>r.lifeLevel==='偶爾').length,ra=d.filter(r=>r.lifeLevel==='幾乎不來').length;
+    const st=dKnown.filter(r=>r.lifeLevel==='穩定').length,oc=dKnown.filter(r=>r.lifeLevel==='偶爾').length,ra=dKnown.filter(r=>r.lifeLevel==='幾乎不來').length;
     pieC('c-stable',['穩定','偶爾','幾乎不來'],[st,oc,ra],['#10b981','#f59e0b','#ef4444']);
     document.getElementById('ple').innerHTML=[['穩定',st,'#10b981'],['偶爾',oc,'#f59e0b'],['幾乎不來',ra,'#ef4444']].map(([n,v,c])=>`<span><span class="pd" style="background:${c}"></span>${n} (${v})</span>`).join('');
     const ps=['聖徒','一方聖徒','福朋'];
-    barC('c-parent',ps,[{label:'穩定',data:ps.map(p=>d.filter(r=>r.parentStatus===p&&r.lifeLevel==='穩定').length),backgroundColor:'#10b981',stack:'a'},{label:'偶爾',data:ps.map(p=>d.filter(r=>r.parentStatus===p&&r.lifeLevel==='偶爾').length),backgroundColor:'#f59e0b',stack:'a'},{label:'幾乎不來',data:ps.map(p=>d.filter(r=>r.parentStatus===p&&r.lifeLevel==='幾乎不來').length),backgroundColor:'#ef4444',stack:'a'}]);
-    barC('c-gloss',grades,[{label:'穩定',data:grades.map(g=>d.filter(r=>r.grade===g&&r.lifeLevel==='穩定').length),backgroundColor:'#10b981',stack:'a'},{label:'偶爾',data:grades.map(g=>d.filter(r=>r.grade===g&&r.lifeLevel==='偶爾').length),backgroundColor:'#f59e0b',stack:'a'},{label:'幾乎不來',data:grades.map(g=>d.filter(r=>r.grade===g&&r.lifeLevel==='幾乎不來').length),backgroundColor:'#ef4444',stack:'a'}]);
+    barC('c-parent',ps,[{label:'穩定',data:ps.map(p=>dKnown.filter(r=>r.parentStatus===p&&r.lifeLevel==='穩定').length),backgroundColor:'#10b981',stack:'a'},{label:'偶爾',data:ps.map(p=>dKnown.filter(r=>r.parentStatus===p&&r.lifeLevel==='偶爾').length),backgroundColor:'#f59e0b',stack:'a'},{label:'幾乎不來',data:ps.map(p=>dKnown.filter(r=>r.parentStatus===p&&r.lifeLevel==='幾乎不來').length),backgroundColor:'#ef4444',stack:'a'}]);
+    // ★ 年齡穩定度比較也用 dKnown
+    barC('c-gloss',grades,[{label:'穩定',data:grades.map(g=>dKnown.filter(r=>r.grade===g&&r.lifeLevel==='穩定').length),backgroundColor:'#10b981',stack:'a'},{label:'偶爾',data:grades.map(g=>dKnown.filter(r=>r.grade===g&&r.lifeLevel==='偶爾').length),backgroundColor:'#f59e0b',stack:'a'},{label:'幾乎不來',data:grades.map(g=>dKnown.filter(r=>r.grade===g&&r.lifeLevel==='幾乎不來').length),backgroundColor:'#ef4444',stack:'a'}]);
   } else {
-    document.getElementById('cen-tbody').innerHTML=filtCensus().map(r=>`<tr><td><strong>${r.name}</strong></td><td>${r.grade}</td><td>${r.church}</td><td><span class="badge ${r.lifeLevel==='穩定'?'b-s':r.lifeLevel==='偶爾'?'b-o':'b-r'}">${r.lifeLevel}</span></td><td>${r.parentStatus}</td></tr>`).join('');
+    // ★ 列表也過濾掉「未知」年級
+    document.getElementById('cen-tbody').innerHTML=filtCensus().filter(r=>r.grade!=='未知').map(r=>`<tr><td><strong>${r.name}</strong></td><td>${r.grade}</td><td>${r.church}</td><td><span class="badge ${r.lifeLevel==='穩定'?'b-s':r.lifeLevel==='偶爾'?'b-o':'b-r'}">${r.lifeLevel}</span></td><td>${r.parentStatus}</td></tr>`).join('');
   }
 }
 
@@ -505,7 +500,6 @@ function renderActivity(){
   document.getElementById('act-ch').style.display=curMode==='charts'?'block':'none';
   document.getElementById('act-tbl').style.display=curMode==='table'?'block':'none';
 
-  // Summary cards
   const totBase=d.reduce((s,r)=>s+(r.baseChild||0),0);
   const totGrp=d.reduce((s,r)=>s+(r.baseGrpP||0),0);
   const lm=actMonths[actMonths.length-1]||'';
@@ -520,7 +514,6 @@ function renderActivity(){
   `;
 
   if(curMode==='charts'){
-    // 趨勢線
     if(actMonths.length){
       if(trendMode==='ppl'){
         lineC('c-trend',actMonths,[
@@ -534,19 +527,16 @@ function renderActivity(){
         ]);
       }
     }
-    // 照顧區基數比較
     const zones=gSelZ()==='全部地區'?Object.keys(CARE_ZONES):[gSelZ()];
     barC('c-zbase',zones,[
       {label:'兒童主日基數',data:zones.map(z=>activityData.filter(r=>(actZones[r.church]||getZone(r.church))===z).reduce((s,r)=>s+(r.baseChild||0),0)),backgroundColor:'#3b82f6',borderRadius:4},
       {label:'兒童排基數',  data:zones.map(z=>activityData.filter(r=>(actZones[r.church]||getZone(r.church))===z).reduce((s,r)=>s+(r.baseGrpP||0),0)),backgroundColor:'#10b981',borderRadius:4},
     ]);
-    // 各召會最新月
     const lm2=actMonths[actMonths.length-1];
     const key=ccMode==='sun'?'sun':'grp';
     const sorted=[...d].sort((a,b)=>(b.months[lm2]?.[key]||0)-(a.months[lm2]?.[key]||0));
     barC('c-church-act',sorted.map(r=>r.church),[{data:sorted.map(r=>r.months[lm2]?.[key]||0),backgroundColor:ccMode==='sun'?'#6366f1':'#10b981',borderRadius:4}]);
   } else {
-    // 列表模式
     const colW=actMonths.length;
     let html=`<table class="atbl"><thead><tr>
       <th class="left" rowspan="2">召會</th>
@@ -575,7 +565,6 @@ function renderActivity(){
         });
         html+='</tr>';
       });
-      // 小計
       const tBase=rows.reduce((s,r)=>s+(r.baseChild||0),0);
       const tGrp= rows.reduce((s,r)=>s+(r.baseGrpP||0),0);
       html+=`<tr class="sr"><td class="left" style="padding-left:.75rem">小計</td><td><strong>${tBase}</strong></td><td><strong>${tGrp}</strong></td>`;
