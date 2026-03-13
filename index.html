@@ -156,7 +156,7 @@ body { font-family:'Noto Sans TC',Arial,sans-serif; background:#f1f5f9; color:#0
       <div id="cen-ch">
         <div class="grid-3">
           <div class="cc"><div class="cc-hd"><span>📚</span><div><div class="cc-title">學齡梯隊</div><div class="cc-sub">依年齡</div></div></div><div class="cw"><canvas id="c-grade"></canvas></div></div>
-          <div class="cc"><div class="cc-hd"><span>🏠</span><div><div class="cc-title">各召會人數</div><div class="cc-sub">Top 20</div></div></div><div class="cw"><canvas id="c-church"></canvas></div></div>
+          <div class="cc"><div class="cc-hd"><span>🏠</span><div><div class="cc-title" id="church-title">各照顧區人數</div><div class="cc-sub" id="church-sub">依照顧區彙總</div></div></div><div class="cw"><canvas id="c-church"></canvas></div></div>
           <div class="cc"><div class="cc-hd"><span>⚡</span><div><div class="cc-title">穩定度分布</div></div></div><div class="cw" style="height:180px"><canvas id="c-stable"></canvas></div><div class="ple" id="ple"></div></div>
         </div>
         <div class="grid-2">
@@ -266,7 +266,29 @@ let selCols=['count','baseChild','sun','ratioSun','grp','ratioGrp'];
 
 // ════ Helpers ════
 const getZone=ch=>{ for(const[z,l] of Object.entries(CARE_ZONES)) if(l.some(s=>ch.includes(s))) return z; if(CHIAYI_SUBS.some(s=>ch.includes(s))) return '嘉義照顧區'; return '未歸類'; };
-const mapGrade=a=>{ if(isNaN(a)||a<0||a>14) return '未知'; if(a<=6) return '學齡前'; if(a<=12) return `${a-6}年級`; return a===13?'國一':'國二'; };
+const mapGrade=a=>{ if(isNaN(a)||a<0||a>14) return '未知'; if(a<=6) return '學齡前'; if(a<=12) return `${a-6}年級`; return a===13?'國一':null; };
+// 從表頭掃描年齡/年級欄，回傳 [{col, label}]
+function detectGradeCols(hd){
+  const cols=[];
+  const AGE_PAT=/^(\d+)歲/;
+  const GRD_PAT=/^([一二三四五六])年級/;
+  hd.forEach((h,i)=>{
+    const clean=h.replace(/\n/g,' ').trim();
+    const am=clean.match(AGE_PAT);
+    if(am){ const a=parseInt(am[1]); cols.push({col:i,label:a<=6?'學齡前':`${a}歲`,age:a}); return; }
+    const gm=clean.match(GRD_PAT);
+    if(gm){ const kanji={'一':1,'二':2,'三':3,'四':4,'五':5,'六':6}; const n=kanji[gm[1]]; cols.push({col:i,label:n+'年級',age:null}); }
+  });
+  return cols;
+}
+function gradeFromRow(row, gradeCols){
+  // 找第一個有值（非空、非0、非'---'）的年齡欄
+  for(const {col,label} of gradeCols){
+    const v=String(row[col]||'').trim();
+    if(v&&v!=='0'&&v!=='---'&&v!=='-') return label;
+  }
+  return null;
+}
 const isSaved=v=>{ const s=String(v||'').trim(); if(!s||s==='0') return false; if(['否','未','福','外','朋友','不'].some(w=>s.includes(w))) return false; return ['是','已','v','V','y','Y','1','得救','聖徒','弟兄','姊妹','主內','受浸'].some(w=>s.includes(w)); };
 const findC=(hd,al,ex=[])=>{ let i=hd.findIndex(h=>al.some(a=>h===a)); if(i!==-1) return i; return hd.findIndex(h=>al.some(a=>h.includes(a))&&!ex.some(e=>h.includes(e))); };
 const num=v=>{ if(v==null||v==='') return null; const n=parseFloat(String(v).replace('%','')); return isNaN(n)?null:n; };
@@ -295,6 +317,7 @@ function parseCensus(ws,sn,XLSX){
   const hd=raw[0].map(h=>String(h||'').replace(/\n/g,' ').trim());
   const ni=findC(hd,['兒童姓名','姓名','學生姓名']); if(ni===-1) return [];
   const ai=findC(hd,['年齡','歲數','足歲']);
+  const gradeCols=detectGradeCols(hd);
   const ci=findC(hd,['召會','單位','地區']);
   const si=findC(hd,['主日','主日情形']);
   const gi=findC(hd,['兒排','兒排情形']);
@@ -304,6 +327,7 @@ function parseCensus(ws,sn,XLSX){
   return raw.slice(1).filter((row,ri)=>{ const n=String(row[ni]||'').trim(); return n&&!/^\d+$/.test(n); }).map((row,ri)=>{
     const name=String(row[ni]||'').trim();
     const age=parseFloat(String(row[ai]||'').replace(/[^0-9.]/g,''));
+    const gradeFromHdr=gradeCols.length?gradeFromRow(row,gradeCols):null;
     let church=String(row[ci]||sn||'').trim();
     if(church.includes('大區')&&subI!==-1){ const sv=String(row[subI]||'').replace(/\(.*?\)|（.*?）/g,'').trim(); if(sv&&sv!=='---'&&!/^\d/.test(sv)) church=sv; }
     const m=ALL_KNOWN.find(s=>church.includes(s)); if(m) church=m;
@@ -313,8 +337,10 @@ function parseCensus(ws,sn,XLSX){
     let lifeLevel='幾乎不來';
     if(sv.includes('經常')||gv.includes('經常')||parseInt(sv)>=3||parseInt(gv)>=3) lifeLevel='穩定';
     else if(sv.includes('偶爾')||gv.includes('偶爾')||parseInt(sv)>0||parseInt(gv)>0) lifeLevel='偶爾';
-    return {id:`c${ri}`,name,grade:mapGrade(age),church,lifeLevel,parentStatus};
-  });
+    const grade=gradeFromHdr||mapGrade(age);
+    if(grade===null) return null;
+    return {id:`c${ri}`,name,grade,church,lifeLevel,parentStatus};
+  }).filter(r=>r!==null);
 }
 
 // ════ Excel 解析 — 召會生活統計（三列表頭 + 月份欄）════
@@ -475,9 +501,23 @@ function renderCensus(){
     const go=g=>g==='學齡前'?0:g.includes('年級')?parseInt(g):g==='國一'?10:11;
     const grades=[...new Set(dKnown.map(r=>r.grade))].sort((a,b)=>go(a)-go(b));
     barC('c-grade',grades,[{data:grades.map(g=>dKnown.filter(r=>r.grade===g).length),backgroundColor:'#3b82f6',borderRadius:4}]);
-    const cm={}; dKnown.forEach(r=>{cm[r.church]=(cm[r.church]||0)+1;});
-    const srt=Object.entries(cm).sort((a,b)=>b[1]-a[1]).slice(0,20);
-    hbarC('c-church',srt.map(x=>x[0]),srt.map(x=>x[1]),'#10b981');
+    let churchLabels, churchData;
+    if(gSelZ()==='全部地區'){
+      // 全部區域：以照顧區彙總
+      const zm={};
+      Object.keys(CARE_ZONES).forEach(z=>{ zm[z]=0; });
+      dKnown.forEach(r=>{ const z=getZone(r.church); if(zm[z]!==undefined) zm[z]++; else zm[z]=(zm[z]||0)+1; });
+      const zsrt=Object.entries(zm).sort((a,b)=>b[1]-a[1]);
+      churchLabels=zsrt.map(x=>x[0]); churchData=zsrt.map(x=>x[1]);
+    } else {
+      // 單一區域：顯示個別召會 Top 20
+      const cm={}; dKnown.forEach(r=>{cm[r.church]=(cm[r.church]||0)+1;});
+      const srt=Object.entries(cm).sort((a,b)=>b[1]-a[1]).slice(0,20);
+      churchLabels=srt.map(x=>x[0]); churchData=srt.map(x=>x[1]);
+    }
+    document.getElementById('church-title').textContent=gSelZ()==='全部地區'?'各照顧區人數':'各召會人數';
+    document.getElementById('church-sub').textContent=gSelZ()==='全部地區'?'依照顧區彙總':'Top 20';
+    hbarC('c-church',churchLabels,churchData,'#10b981');
     const st=dKnown.filter(r=>r.lifeLevel==='穩定').length,oc=dKnown.filter(r=>r.lifeLevel==='偶爾').length,ra=dKnown.filter(r=>r.lifeLevel==='幾乎不來').length;
     pieC('c-stable',['穩定','偶爾','幾乎不來'],[st,oc,ra],['#10b981','#f59e0b','#ef4444']);
     document.getElementById('ple').innerHTML=[['穩定',st,'#10b981'],['偶爾',oc,'#f59e0b'],['幾乎不來',ra,'#ef4444']].map(([n,v,c])=>`<span><span class="pd" style="background:${c}"></span>${n} (${v})</span>`).join('');
